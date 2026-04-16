@@ -65,15 +65,14 @@ async def run_apify_actor(actor_id: str, input_data: dict) -> list[dict]:
         raise HTTPException(status_code=500, detail="APIFY_API_TOKEN が未設定です")
 
     base_url = "https://api.apify.com/v2"
-    headers = {"Authorization": f"Bearer {APIFY_API_TOKEN}"}
+    token = APIFY_API_TOKEN
 
     async with httpx.AsyncClient(timeout=120) as client:
-        # Actor 実行開始
+        # Actor 実行開始（トークンをURLパラメータで渡す）
         run_resp = await client.post(
             f"{base_url}/acts/{actor_id}/runs",
-            headers=headers,
-            json={"input": input_data},
-            params={"waitForFinish": 120},   # 最大120秒同期待機
+            json=input_data,
+            params={"token": token, "waitForFinish": 120},
         )
         if run_resp.status_code not in (200, 201):
             raise HTTPException(
@@ -90,8 +89,7 @@ async def run_apify_actor(actor_id: str, input_data: dict) -> list[dict]:
         # データセット取得
         dataset_resp = await client.get(
             f"{base_url}/datasets/{dataset_id}/items",
-            headers=headers,
-            params={"format": "json"},
+            params={"token": token, "format": "json"},
         )
         return dataset_resp.json() if dataset_resp.status_code == 200 else []
 
