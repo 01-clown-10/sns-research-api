@@ -258,3 +258,44 @@ async def research_accounts(req: ResearchRequest):
 @router.get("/health")
 async def health():
     return {"status": "ok", "apify_token_set": bool(APIFY_API_TOKEN)}
+
+
+@router.get("/research", response_model=ResearchResponse)
+async def research_accounts_get(
+    handles: str,
+    platform: str,
+    max_results: Optional[int] = 20,
+):
+    """
+    GETエンドポイント版（Claude web_fetch対応）
+    使い方: GET /sns/research?handles=aaa,bbb,ccc&platform=tiktok&max_results=10
+    """
+    handle_list = [h.strip() for h in handles.split(",") if h.strip()]
+    if not handle_list:
+        raise HTTPException(status_code=400, detail="handles が空です")
+
+    platform_lower = platform.lower()
+    if platform_lower not in ACTORS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"未対応のプラットフォーム: {platform}。対応: {list(ACTORS.keys())}"
+        )
+
+    actor_id = ACTORS[platform_lower]
+    actor_input = build_actor_input(platform_lower, handle_list, max_results)
+
+    raw = await run_apify_actor(actor_id, actor_input)
+
+    parser = PARSERS[platform_lower]
+    accounts = parser(raw, handle_list)
+
+    accounts.sort(
+        key=lambda a: a.followers if a.followers is not None else -1,
+        reverse=True,
+    )
+
+    return ResearchResponse(
+        platform=platform_lower,
+        total=len(accounts),
+        accounts=accounts,
+    )
