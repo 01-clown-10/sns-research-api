@@ -71,7 +71,7 @@ async def run_apify_actor(actor_id: str, input_data: dict) -> list[dict]:
         # Actor 実行開始（トークンをURLパラメータで渡す）
         run_resp = await client.post(
             f"{base_url}/acts/{actor_id}/runs",
-            json=input_data,
+            json={"input": input_data},
             params={"token": token, "waitForFinish": 120},
         )
         if run_resp.status_code not in (200, 201):
@@ -192,7 +192,7 @@ def build_actor_input(platform: str, handles: list[str], max_results: int) -> di
 
     if platform == "tiktok":
         return {
-            "profiles": clean,
+            "profiles": [f"https://www.tiktok.com/@{h}" for h in clean],
             "resultsType": "details",
             "maxProfilesPerQuery": max_results,
         }
