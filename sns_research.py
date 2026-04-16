@@ -21,10 +21,10 @@ APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
 
 # ---- Apify Actor ID ----
 ACTORS = {
-    "tiktok":    "clockworks/tiktok-profile-scraper",
-    "instagram": "apify/instagram-scraper",
-    "youtube":   "streamers/youtube-scraper",
-    "x":         "quacker/twitter-scraper",
+    "tiktok":    "clockworks~tiktok-profile-scraper",
+    "instagram": "apify~instagram-scraper",
+    "youtube":   "streamers~youtube-scraper",
+    "x":         "apidojo~tweet-scraper",
 }
 
 
