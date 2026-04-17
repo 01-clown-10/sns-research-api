@@ -128,7 +128,7 @@ def build_actor_input(platform: str, handles: list[str], max_results: int) -> di
         return {
             "profiles": clean,
             "resultsType": "details",
-            "maxProfilesPerQuery": max_results,
+            "maxPostsPerProfile": 1,  # 課金を最小化：1アカウント1動画のみ
         }
     elif platform == "instagram":
         return {
@@ -180,9 +180,18 @@ async def research_accounts_get(
         raise HTTPException(status_code=502, detail=f"Apify実行エラー: {str(e)}")
 
     accounts = PARSERS[platform_lower](items)
-    accounts.sort(key=lambda a: a.followers if a.followers is not None else -1, reverse=True)
 
-    return ResearchResponse(platform=platform_lower, total=len(accounts), accounts=accounts)
+    # ハンドルで重複除去（最初に出現したものを残す）
+    seen = set()
+    unique_accounts = []
+    for acc in accounts:
+        if acc.handle not in seen:
+            seen.add(acc.handle)
+            unique_accounts.append(acc)
+
+    unique_accounts.sort(key=lambda a: a.followers if a.followers is not None else -1, reverse=True)
+
+    return ResearchResponse(platform=platform_lower, total=len(unique_accounts), accounts=unique_accounts)
 
 
 @router.get("/health")
