@@ -181,11 +181,11 @@ async def research_accounts_get(
 
     accounts = PARSERS[platform_lower](items)
 
-    # ハンドルで重複除去（最初に出現したものを残す）
+    # 重複除去 & 空ハンドル除外
     seen = set()
     unique_accounts = []
     for acc in accounts:
-        if acc.handle not in seen:
+        if acc.handle not in seen and acc.handle != "@" and acc.followers is not None:
             seen.add(acc.handle)
             unique_accounts.append(acc)
 
