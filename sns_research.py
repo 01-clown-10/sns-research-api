@@ -1,39 +1,24 @@
 """
 SNS競合調査エンドポイント
-SynapScale FastAPI に追加するモジュール
-
-使い方:
-  main.py に以下を追加:
-    from sns_research import router as sns_router
-    app.include_router(sns_router)
+Apify Python Client を使用
 """
 
-import asyncio
-import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import os
+from apify_client import ApifyClient
 
 router = APIRouter(prefix="/sns", tags=["SNS競合調査"])
 
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
 
-# ---- Apify Actor ID ----
 ACTORS = {
     "tiktok":    "clockworks~tiktok-profile-scraper",
     "instagram": "apify~instagram-scraper",
     "youtube":   "streamers~youtube-scraper",
     "x":         "apidojo~tweet-scraper",
 }
-
-
-# ---- リクエスト/レスポンス型 ----
-
-class ResearchRequest(BaseModel):
-    handles: list[str]          # 例: ["@hoge", "fuga"]
-    platform: str               # "tiktok" | "instagram" | "youtube" | "x"
-    max_results: Optional[int] = 20
 
 
 class AccountData(BaseModel):
@@ -51,65 +36,20 @@ class AccountData(BaseModel):
 class ResearchResponse(BaseModel):
     platform: str
     total: int
-    accounts: list[AccountData]  # フォロワー降順ソート済み
+    accounts: list[AccountData]
 
 
-# ---- Apify 共通呼び出し ----
-
-async def run_apify_actor(actor_id: str, input_data: dict) -> list[dict]:
-    """
-    Apify Actor を同期的に実行してデータを返す
-    タイムアウト: 120秒
-    """
-    if not APIFY_API_TOKEN:
-        raise HTTPException(status_code=500, detail="APIFY_API_TOKEN が未設定です")
-
-    base_url = "https://api.apify.com/v2"
-    token = APIFY_API_TOKEN
-
-    async with httpx.AsyncClient(timeout=120) as client:
-        # Actor 実行開始（トークンをURLパラメータで渡す）
-        run_resp = await client.post(
-            f"{base_url}/acts/{actor_id}/runs",
-            json={"input": input_data},
-            params={"token": token, "waitForFinish": 120},
-        )
-        if run_resp.status_code not in (200, 201):
-            raise HTTPException(
-                status_code=502,
-                detail=f"Apify Actor 起動失敗: {run_resp.text}"
-            )
-
-        run_data = run_resp.json().get("data", {})
-        dataset_id = run_data.get("defaultDatasetId")
-
-        if not dataset_id:
-            raise HTTPException(status_code=502, detail="DatasetID が取得できませんでした")
-
-        # データセット取得
-        dataset_resp = await client.get(
-            f"{base_url}/datasets/{dataset_id}/items",
-            params={"token": token, "format": "json"},
-        )
-        return dataset_resp.json() if dataset_resp.status_code == 200 else []
-
-
-# ---- プラットフォーム別パーサー ----
-
-def parse_tiktok(raw: list[dict], handles: list[str]) -> list[AccountData]:
+def parse_tiktok(items: list[dict]) -> list[AccountData]:
     results = []
-    for item in raw:
+    for item in items:
         author = item.get("authorMeta", {})
         handle = author.get("name", "")
-        followers = author.get("fans", None)
-        hearts = author.get("heart", None)
-        videos = author.get("video", None)
-
-        # ER概算 = 総いいね ÷ フォロワー ÷ 動画数（動画あたり平均ER）
+        followers = author.get("fans")
+        hearts = author.get("heart")
+        videos = author.get("video")
         er = None
         if followers and hearts and videos and followers > 0 and videos > 0:
             er = round((hearts / videos / followers) * 100, 2)
-
         results.append(AccountData(
             handle=f"@{handle}",
             display_name=author.get("nickName"),
@@ -124,18 +64,16 @@ def parse_tiktok(raw: list[dict], handles: list[str]) -> list[AccountData]:
     return results
 
 
-def parse_instagram(raw: list[dict], handles: list[str]) -> list[AccountData]:
+def parse_instagram(items: list[dict]) -> list[AccountData]:
     results = []
-    for item in raw:
+    for item in items:
         handle = item.get("username", "")
-        followers = item.get("followersCount", None)
-        posts = item.get("postsCount", None)
         results.append(AccountData(
             handle=f"@{handle}",
             display_name=item.get("fullName"),
-            followers=followers,
+            followers=item.get("followersCount"),
             following=item.get("followsCount"),
-            posts=posts,
+            posts=item.get("postsCount"),
             bio=item.get("biography"),
             url=f"https://www.instagram.com/{handle}/",
             platform="instagram",
@@ -143,9 +81,9 @@ def parse_instagram(raw: list[dict], handles: list[str]) -> list[AccountData]:
     return results
 
 
-def parse_youtube(raw: list[dict], handles: list[str]) -> list[AccountData]:
+def parse_youtube(items: list[dict]) -> list[AccountData]:
     results = []
-    for item in raw:
+    for item in items:
         handle = item.get("channelId", "")
         results.append(AccountData(
             handle=handle,
@@ -159,9 +97,9 @@ def parse_youtube(raw: list[dict], handles: list[str]) -> list[AccountData]:
     return results
 
 
-def parse_x(raw: list[dict], handles: list[str]) -> list[AccountData]:
+def parse_x(items: list[dict]) -> list[AccountData]:
     results = []
-    for item in raw:
+    for item in items:
         handle = item.get("userName", "")
         results.append(AccountData(
             handle=f"@{handle}",
@@ -184,15 +122,11 @@ PARSERS = {
 }
 
 
-# ---- Actor 入力ビルダー ----
-
 def build_actor_input(platform: str, handles: list[str], max_results: int) -> dict:
-    # @を除去して正規化
     clean = [h.lstrip("@") for h in handles]
-
     if platform == "tiktok":
         return {
-            "profiles": [f"https://www.tiktok.com/@{h}" for h in clean],
+            "profiles": clean,
             "resultsType": "details",
             "maxProfilesPerQuery": max_results,
         }
@@ -209,53 +143,10 @@ def build_actor_input(platform: str, handles: list[str], max_results: int) -> di
         }
     elif platform == "x":
         return {
-            "handle": clean,
-            "tweetsDesired": 1,   # プロフィール情報のみ取得
+            "handles": clean,
+            "tweetsDesired": 1,
         }
     return {}
-
-
-# ---- エンドポイント ----
-
-@router.post("/research", response_model=ResearchResponse)
-async def research_accounts(req: ResearchRequest):
-    """
-    ハンドルリストを受け取り、Apify で各アカウントのフォロワー数等を取得して
-    フォロワー降順のリストを返す
-    """
-    platform = req.platform.lower()
-    if platform not in ACTORS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"未対応のプラットフォーム: {platform}。対応: {list(ACTORS.keys())}"
-        )
-
-    actor_id = ACTORS[platform]
-    actor_input = build_actor_input(platform, req.handles, req.max_results)
-
-    # Apify 実行
-    raw = await run_apify_actor(actor_id, actor_input)
-
-    # パース
-    parser = PARSERS[platform]
-    accounts = parser(raw, req.handles)
-
-    # フォロワー降順ソート（不明は末尾）
-    accounts.sort(
-        key=lambda a: a.followers if a.followers is not None else -1,
-        reverse=True,
-    )
-
-    return ResearchResponse(
-        platform=platform,
-        total=len(accounts),
-        accounts=accounts,
-    )
-
-
-@router.get("/health")
-async def health():
-    return {"status": "ok", "apify_token_set": bool(APIFY_API_TOKEN)}
 
 
 @router.get("/research", response_model=ResearchResponse)
@@ -265,35 +156,35 @@ async def research_accounts_get(
     max_results: Optional[int] = 20,
 ):
     """
-    GETエンドポイント版（Claude web_fetch対応）
-    使い方: GET /sns/research?handles=aaa,bbb,ccc&platform=tiktok&max_results=10
+    GETエンドポイント（Claude web_fetch対応）
+    例: GET /sns/research?handles=aaa,bbb&platform=tiktok&max_results=10
     """
+    if not APIFY_API_TOKEN:
+        raise HTTPException(status_code=500, detail="APIFY_API_TOKEN が未設定です")
+
     handle_list = [h.strip() for h in handles.split(",") if h.strip()]
     if not handle_list:
         raise HTTPException(status_code=400, detail="handles が空です")
 
     platform_lower = platform.lower()
     if platform_lower not in ACTORS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"未対応のプラットフォーム: {platform}。対応: {list(ACTORS.keys())}"
-        )
+        raise HTTPException(status_code=400, detail=f"未対応のプラットフォーム: {platform}")
 
-    actor_id = ACTORS[platform_lower]
     actor_input = build_actor_input(platform_lower, handle_list, max_results)
 
-    raw = await run_apify_actor(actor_id, actor_input)
+    try:
+        client = ApifyClient(APIFY_API_TOKEN)
+        run = client.actor(ACTORS[platform_lower]).call(run_input=actor_input)
+        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Apify実行エラー: {str(e)}")
 
-    parser = PARSERS[platform_lower]
-    accounts = parser(raw, handle_list)
+    accounts = PARSERS[platform_lower](items)
+    accounts.sort(key=lambda a: a.followers if a.followers is not None else -1, reverse=True)
 
-    accounts.sort(
-        key=lambda a: a.followers if a.followers is not None else -1,
-        reverse=True,
-    )
+    return ResearchResponse(platform=platform_lower, total=len(accounts), accounts=accounts)
 
-    return ResearchResponse(
-        platform=platform_lower,
-        total=len(accounts),
-        accounts=accounts,
-    )
+
+@router.get("/health")
+async def health():
+    return {"status": "ok", "apify_token_set": bool(APIFY_API_TOKEN)}
